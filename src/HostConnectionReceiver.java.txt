@@ -1,0 +1,35 @@
+import java.io.IOException;
+import java.net.ServerSocket;
+import java.util.List;
+
+public class HostConnectionReceiver implements Runnable {
+	final int SERVER_SOCKET_NUM = 40186;
+	private ServerSocket serverSocket;
+	private List<Connection> connectionList;
+	
+	public HostConnectionReceiver(List<Connection> connectionList) {
+		this.connectionList = connectionList;
+	}
+	
+	@Override
+	public void run() {
+		try {
+			serverSocket = new ServerSocket(SERVER_SOCKET_NUM);
+			Connection connection;
+			
+			while (true) {
+				connection = new Connection(serverSocket.accept());
+				connectionList.add(connection);
+				(new Thread(new HostConnectionHandler(connection, connectionList))).start();
+			}
+		} catch (IOException e) {}
+	}
+	
+	public void closeSocket() {
+		try {
+			serverSocket.close();
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+	}
+}

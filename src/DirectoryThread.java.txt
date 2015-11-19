@@ -1,0 +1,325 @@
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.text.DecimalFormat;
+import java.util.List;
+
+public class DirectoryThread implements Runnable {
+    private final int HEADER_DATA_SIZE = 3;
+    private final int MAX_PACKET_SIZE = 80;
+    private final int TIMEOUT_LENGTH = 1000;
+    private final int ONLINE = 1;
+    private final int OFFLINE = 2;
+    private final int JOIN = 3;
+    private final int LEAVE = 4;
+    private final int QUERY = 5;
+    
+    private List<User> userList;
+    private List<ExpectedPacket> expectedPacketList;
+    private DatagramPacket sendPacket;
+    private DatagramPacket receivePacket;
+    private DatagramSocket socket;
+    private byte[] sendBuf;
+    private byte[] recvBuf;
+    private int cmd;
+    private int seqNum;
+    private int morePackets;
+    private ExpectedPacket expectedPacket;
+    
+    public DirectoryThread (List<User> userList, List<ExpectedPacket> expectedPacketList, DatagramPacket receivePacket, DatagramSocket socket) {
+        this.userList = userList;
+        this.expectedPacketList = expectedPacketList;
+        this.receivePacket = receivePacket;
+        this.socket = socket;
+    }
+    
+    @Override
+    public void run() {
+        recvBuf = receivePacket.getData();
+        morePackets = recvBuf[0];
+        seqNum = recvBuf[1];
+        cmd = recvBuf[2];
+        
+        int i;
+        boolean found;
+        
+        if (seqNum == 0) {
+            
+            switch(cmd) {
+                case ONLINE:
+                    String nickname = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                    
+                    while (morePackets == 1) {
+                        sendPacket(("0" + seqNum + cmd + " 200 OK").getBytes(), receivePacket.getAddress(), receivePacket.getPort());
+                        
+                        expectedPacket = new ExpectedPacket(seqNum + 1, cmd);
+                        expectedPacketList.add(expectedPacket);
+                        
+                        do {
+                            try {
+                                Thread.sleep(1000);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        } while ((recvBuf = expectedPacket.getMessage()) == null);
+                        
+                        nickname.concat(new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE));
+                        morePackets = recvBuf[0];
+                        seqNum++;
+                    }
+                    
+                    sendPacket(("0" + seqNum + cmd + " 200 OK").getBytes(), receivePacket.getAddress(), receivePacket.getPort());
+                    
+                    if (nickname.indexOf(0) >= 0) {
+                        nickname = nickname.substring(0, nickname.indexOf(0));
+                    }
+                    userList.add(new User(nickname, receivePacket.getAddress(), receivePacket.getPort()));
+                    
+                    break;
+                case OFFLINE:
+                    i = 0;
+                    found = false;
+                    boolean userInOtherChatroom = false;
+                    String currentChatroom = null;
+                    while (i < userList.size() && !found) {
+                        User user = userList.get(i);
+                        if (receivePacket.getAddress().equals(user.getIPAddress()) && receivePacket.getPort() == user.getPort()) {
+                            currentChatroom = user.getJoinedChatroom();
+                            userInOtherChatroom = !currentChatroom.equals(user.getNickname());
+                            userList.remove(i);                             
+                            found = true;
+                        }
+                        
+                        i++;
+                    }
+                    
+                    if (found && userInOtherChatroom) {
+                        i = 0;
+                        found = false;
+                        while (i < userList.size() && !found) {
+                            User user = userList.get(i);
+                            if (currentChatroom.equals(user.getJoinedChatroom())) {
+                                user.removeUserFromChatroom();                              
+                                found = true;
+                            }
+                            
+                            i++;
+                        }
+                    }
+                    
+                    if (found) {
+                        sendBuf = ("0" + seqNum + cmd + " 200 OK").getBytes();
+                    } else {
+                        sendBuf = ("0" + seqNum + cmd + " 400 ERROR").getBytes();
+                    }                       
+
+                    sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                    
+                    break;
+                case JOIN:
+                    String chatroom = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                    
+                    while (morePackets == 1) {
+                        sendPacket(("0" + seqNum + cmd + " 200 OK").getBytes(), receivePacket.getAddress(), receivePacket.getPort());
+                        
+                        expectedPacket = new ExpectedPacket(seqNum + 1, cmd);
+                        expectedPacketList.add(expectedPacket);
+                        
+                        do {
+                            try {
+                                Thread.sleep(1000);
+                            } catch (InterruptedException e) {
+                                e.printStackTrace();
+                            }
+                        } while ((recvBuf = expectedPacket.getMessage()) == null);
+                        
+                        chatroom.concat(new String(recvBuf, 3, recvBuf.length));
+                        morePackets = recvBuf[0];
+                        seqNum++;
+                    }
+                    
+                    if (chatroom.indexOf(0) >= 0) {
+                        chatroom = chatroom.substring(0, chatroom.indexOf(0));
+                    }
+                    
+                    i = 0;
+                    boolean foundUser = false;
+                    boolean foundChatroom = false;
+                    sendBuf = new byte[MAX_PACKET_SIZE];
+                    sendBuf[0] = 0;
+                    sendBuf[1] = (byte)(seqNum + 1);
+                    sendBuf[2] = JOIN;
+                    while (i < userList.size() && !(foundUser && foundChatroom)) {
+                        User user = userList.get(i);
+                        if (receivePacket.getAddress().equals(user.getIPAddress()) && receivePacket.getPort() == user.getPort()) {
+                            user.joinChatroom(chatroom);
+                            foundUser = true;
+                        } else if (chatroom.equals(user.getNickname())) {
+                            user.addUserToChatroom();
+                            System.arraycopy(user.getIPAddress().getHostAddress().getBytes(), 0, sendBuf, HEADER_DATA_SIZE, user.getIPAddress().getHostAddress().getBytes().length);
+                            foundChatroom = true;
+                        }
+                        
+                        i++;
+                    }
+                    
+                    if (foundUser && foundChatroom) {
+                    	boolean success = false;
+                        String response;
+                        
+                        while (!success) {
+                            expectedPacket = new ExpectedPacket(seqNum, JOIN);
+                            expectedPacketList.add(expectedPacket);
+                            
+                            do {
+                                try {
+                                    sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                                    Thread.sleep(TIMEOUT_LENGTH);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
+                            } while ((recvBuf = expectedPacket.getMessage()) == null);
+                            
+                            response = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                            response = response.substring(0, response.indexOf(0));
+                            
+                            if (response.equals(" 200 OK")) {
+                                success = true;
+                            } else if (response.equals(" 400 ERROR")){
+                                sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                            }   
+                        }
+                    } else {
+                        sendBuf = ("0" + seqNum + cmd + " 400 ERROR").getBytes();
+                        sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                    }
+                    
+                    break;
+                case LEAVE:
+                    String joinedChatroom = "";
+                    i = 0;
+                    found = false;
+                    while (i < userList.size() && !found) {
+                        User user = userList.get(i);
+                        if (receivePacket.getAddress().equals(user.getIPAddress()) && receivePacket.getPort() == user.getPort()) {
+                            joinedChatroom = user.getJoinedChatroom();
+                            user.joinChatroom(user.getNickname());
+                            found = true;
+                        }
+                        
+                        i++;
+                    }
+                    
+                    if (found) {
+                        i = 0;
+                        found = false;
+                        while (i < userList.size() && !found) {
+                            User user = userList.get(i);
+                            if (joinedChatroom.equals(user.getNickname())) {
+                                user.removeUserFromChatroom();
+                                found = true;
+                            }
+                            
+                            i++;
+                        }
+                        
+                        if (found) {
+                            sendBuf = ("0" + seqNum + cmd + " 200 OK").getBytes();
+                        } else {
+                            sendBuf = ("0" + seqNum + cmd + " 400 ERROR").getBytes();
+                        }
+                    } else {
+                        sendBuf = ("0" + seqNum + cmd + " 400 ERROR").getBytes();
+                    }                       
+
+                    sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                    
+                    break;
+                case QUERY:
+                    String message = "";
+                    byte[] b;
+                    
+                    for (i = 0; i < userList.size(); i++) {
+                        User user = userList.get(i);
+                        message = message.concat(user.getNickname() + ";");
+                        message = message.concat(user.getIPAddress().toString().substring(user.getIPAddress().toString().indexOf('/') + 1) + ";");
+                        message = message.concat(user.getPort() + ";");
+                        message = message.concat(new DecimalFormat("#.##").format(user.getNumUsersInChatroom() / (double)Math.max(1, userList.size() - 1)) + ";");
+                        message = message.concat(user.getJoinedChatroom() + ";");
+                        message = message.concat(user.getTimeEnteredChatroom() + "`");
+                    }
+                    
+                    for (i = 0; i <= message.length() / (MAX_PACKET_SIZE - HEADER_DATA_SIZE); i++) {
+                        sendBuf = new byte[MAX_PACKET_SIZE];
+                        
+                        if (i + 1 > message.length() / (MAX_PACKET_SIZE - HEADER_DATA_SIZE)) {
+                            sendBuf[0] = 0;
+                            b = message.substring(i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE)).getBytes();
+                        } else {
+                            sendBuf[0] = 1;
+                            b = message.substring(i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE), (i + 1) * (MAX_PACKET_SIZE - HEADER_DATA_SIZE)).getBytes();
+                        }
+                        
+                        sendBuf[1] = (byte)i;
+                        sendBuf[2] = 1;
+                        System.arraycopy(b, 0, sendBuf, HEADER_DATA_SIZE, b.length);
+                        
+                        boolean success = false;
+                        String response;
+                        
+                        while (!success) {
+                            expectedPacket = new ExpectedPacket(i + 1, QUERY);
+                            expectedPacketList.add(expectedPacket);
+                            
+                            do {
+                                try {
+                                    sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                                    Thread.sleep(TIMEOUT_LENGTH);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                }
+                            } while ((recvBuf = expectedPacket.getMessage()) == null);
+                            
+                            response = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                            response = response.substring(0, response.indexOf(0));
+                            
+                            if (response.equals(" 200 OK")) {
+                                success = true;
+                            } else if (response.equals(" 400 ERROR")){
+                                sendPacket(sendBuf, receivePacket.getAddress(), receivePacket.getPort());
+                            }   
+                        }
+                    }
+                    
+                    break;
+                default:
+                    sendPacket(("0" + seqNum + cmd + " 400 ERROR").getBytes(), receivePacket.getAddress(), receivePacket.getPort());
+            }
+        } else {
+            i = 0;
+            boolean success = false;
+            while (i < expectedPacketList.size() && !success) {
+                expectedPacket = expectedPacketList.get(i);
+                
+                if (seqNum == expectedPacket.getSeqNum() && cmd == expectedPacket.getCmd()) {
+                    expectedPacketList.remove(expectedPacket);
+                    expectedPacket.setMessage(recvBuf);
+                    success = true;
+                }
+                
+                i++;
+            }
+        }
+    }
+    
+    private void sendPacket(byte[] sendBuf, InetAddress address, int port) {
+        sendPacket = new DatagramPacket(sendBuf, sendBuf.length, receivePacket.getAddress(), receivePacket.getPort());
+        
+        try {
+            socket.send(sendPacket);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+}

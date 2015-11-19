@@ -1,0 +1,615 @@
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.InetAddress;
+import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.Scanner;
+
+public class Host {
+    public static void main(String[] args) throws IOException {
+        final int HEADER_DATA_SIZE = 3;
+        final int MAX_PACKET_SIZE = 80;
+        final int TIMEOUT_LENGTH = 1000;
+        final int SERVER_SOCKET_NUM = 40186;
+        final int CLIENT_SOCKET_NUM = 40187;
+        final int ONLINE = 1;
+        final int OFFLINE = 2;
+        final int JOIN = 3;
+        final int LEAVE = 4;
+        final int QUERY = 5;
+        final int EXIT = 6;
+        
+        Scanner scan = new Scanner(System.in);
+        boolean online = false;
+        boolean exit = false;
+        boolean success = false;
+        int i;
+        String nickname = "";
+        String currentChatroom = "";
+        String message;
+        String response;
+        byte[] sendBuf;
+        byte[] recvBuf = null;
+        InetAddress directoryAddress;
+        DatagramSocket UDPSocket = new DatagramSocket(CLIENT_SOCKET_NUM);
+        UDPSocket.setSoTimeout(TIMEOUT_LENGTH);
+        DatagramPacket sendPacket;
+        DatagramPacket receivePacket;
+        Connection connection = null;
+        List<Connection> connectionList = Collections.synchronizedList(new ArrayList<Connection>());
+        HostConnectionReceiver connectionReceiver = null;
+        Thread connectionReceiverThread = null;
+        Thread joinThread = null;
+        
+        System.out.print("Please enter the IP address of the directory server: ");
+        directoryAddress = InetAddress.getByName(scan.nextLine());
+        
+        System.out.println("Please enter:\n"
+                + "ONLINE to go online\n"
+                + "QUERY to query for peers\n"
+                + "EXIT to exit");
+        
+        while (!exit) {
+            message = scan.nextLine();
+            int cmd = getCmd(message);
+            
+            if (!online) {                
+                switch (cmd) {
+                    case ONLINE:
+                        System.out.print("Please enter a nickname: ");
+                        nickname = scan.nextLine();
+                        
+                        byte[] nicknameBytes = nickname.getBytes();
+                        sendBuf = new byte[MAX_PACKET_SIZE];
+                        
+                        if (nicknameBytes.length <= (MAX_PACKET_SIZE - HEADER_DATA_SIZE)) {
+                            i = 0;
+                            
+                            sendBuf[0] = 0;
+                            sendBuf[1] = (byte)i;
+                            sendBuf[2] = 1;
+                            System.arraycopy(nicknameBytes, 0, sendBuf, 3, nicknameBytes.length);
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                        } else {
+                            i = 0;
+                            
+                            while (i + 1 <= nicknameBytes.length / (MAX_PACKET_SIZE - HEADER_DATA_SIZE)) {                          
+                                sendBuf = new byte[MAX_PACKET_SIZE];
+                                sendBuf[0] = 1;
+                                sendBuf[1] = (byte)i;
+                                sendBuf[2] = 1;
+                                System.arraycopy(nicknameBytes, i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE), sendBuf, HEADER_DATA_SIZE, MAX_PACKET_SIZE - HEADER_DATA_SIZE);
+                                sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                                UDPSocket.send(sendPacket);
+                                
+                            while (!success)
+                            {
+                                try {
+                                    success = false;
+                                    
+                                    while (!success) {                          
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        response = new String(recvBuf, 0, recvBuf.length);
+                                        response = response.substring(0, response.indexOf(0));
+                                        
+                                        if (response.equals("0" + i + "1 200 OK")) {
+                                            success = true;
+                                        } else if (response.equals("0" + i + "1 400 ERROR")){
+                                            UDPSocket.send(sendPacket);
+                                        }   
+                                    }
+                                } catch (SocketTimeoutException e) {
+                                    UDPSocket.send(sendPacket);
+                                }
+                            }
+                                
+                                i++;
+                            }
+                            
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = (byte)i;
+                            sendBuf[2] = 1;
+                            System.arraycopy(nicknameBytes, i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE), sendBuf, HEADER_DATA_SIZE, nicknameBytes.length - (i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE)));
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                        }
+
+                        UDPSocket.send(sendPacket);
+                        
+                        while (!success)
+                        {
+                            try {
+                                success = false;
+                                
+                                while (!success) {                          
+                                    recvBuf = new byte[MAX_PACKET_SIZE];
+                                    receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                    UDPSocket.receive(receivePacket);
+                                    response = new String(recvBuf, 0, recvBuf.length);
+                                    response = response.substring(0, response.indexOf(0));
+                                    
+                                    if (response.equals("0" + i + "1 200 OK")) {
+                                        success = true;
+                                    } else if (response.equals("0" + i + "1 400 ERROR")){
+                                        UDPSocket.send(sendPacket);
+                                    }   
+                                }
+                            } catch (SocketTimeoutException e) {
+                                UDPSocket.send(sendPacket);
+                            }
+                        }
+                        
+                        connectionList = new ArrayList<Connection>();
+                        connectionReceiver = new HostConnectionReceiver(connectionList);
+                        connectionReceiverThread = new Thread(connectionReceiver);
+                        connectionReceiverThread.start();
+                        
+                        online = true;
+                        currentChatroom = nickname;
+                        System.out.println("You are now in your chatroom. At any time, enter:\n"
+                                    + "QUERY to display a list of peers,\n"
+                                    + "JOIN to join another user's chatroom,\n"
+                                    + "OFFLINE to go offline.");
+                        
+                        break;
+                    case QUERY:
+                        sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 5;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            UDPSocket.send(sendPacket);
+                            
+                            i = 0;
+                            message = "";
+                            success = false;
+                            
+                            while (!success) {
+                                try {
+                                    do {
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        response = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                                        
+                                        if (response.indexOf(0) >= 0) {
+                                            response = response.substring(0, response.indexOf(0));
+                                        }
+                                        
+                                        if (recvBuf[1] == i) {
+                                            i++;
+                                            
+                                            message = message.concat(response);
+                                            
+                                            sendBuf[0] = 0;
+                                            sendBuf[1] = (byte)i;
+                                            sendBuf[2] = 5;
+                                            System.arraycopy((" 200 OK").getBytes(), 0, sendBuf, HEADER_DATA_SIZE, ((" 200 OK").getBytes()).length);
+                                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                                            UDPSocket.send(sendPacket);
+                                        }
+                                        
+                                        if (recvBuf[0] == 0) {
+                                            success = true;
+                                        }
+                                    } while (recvBuf[0] != 0);
+                                } catch (SocketTimeoutException e) {
+                                    UDPSocket.send(sendPacket);
+                                }
+                            }
+                            
+                            if (message.length() > 0) {
+                                System.out.println(message.substring(0, message.indexOf('`')));
+                                
+                                while (message.indexOf('`') + 1 < message.length()) {
+                                    message = message.substring(message.indexOf('`') + 1);
+                                    System.out.println(message.substring(0, message.indexOf('`')));
+                                }
+                            } else {
+                                System.out.println("There are no users online");
+                            }
+                            
+                            break;
+                    case EXIT:
+                        exit = true;
+                }
+            } else {
+                if (currentChatroom.equals(nickname)) {
+                    switch (cmd) {
+                        case QUERY:
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 5;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            UDPSocket.send(sendPacket);
+                            
+                            i = 0;
+                            message = "";
+                            success = false;
+                            
+                            while (!success) {
+                                try {
+                                    do {
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        response = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                                        
+                                        if (response.indexOf(0) >= 0) {
+                                            response = response.substring(0, response.indexOf(0));
+                                        }
+                                        
+                                        if (recvBuf[1] == i) {
+                                            i++;
+                                            
+                                            message = message.concat(response);
+                                            
+                                            sendBuf[0] = 0;
+                                            sendBuf[1] = (byte)i;
+                                            sendBuf[2] = 5;
+                                            System.arraycopy((" 200 OK").getBytes(), 0, sendBuf, HEADER_DATA_SIZE, ((" 200 OK").getBytes()).length);
+                                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                                            UDPSocket.send(sendPacket);
+                                        }
+                                        
+                                        if (recvBuf[0] == 0) {
+                                            success = true;
+                                        }
+                                    } while (recvBuf[0] != 0);
+                                } catch (SocketTimeoutException e) {
+                                    UDPSocket.send(sendPacket);
+                                }
+                            }
+                            
+                            if (message.length() > 0) {
+                                System.out.println(message.substring(0, message.indexOf('`')));
+                                
+                                while (message.indexOf('`') + 1 < message.length()) {
+                                    message = message.substring(message.indexOf('`') + 1);
+                                    System.out.println(message.substring(0, message.indexOf('`')));
+                                }
+                            } else {
+                                System.out.println("There are no users online");
+                            }
+                            
+                            break;
+                        case JOIN:
+                            connectionReceiver.closeSocket();
+                            sendMessage("`", connectionList);
+                            
+                            for (i = 0; i < connectionList.size(); i++) {
+                                connectionList.get(i).close();
+                            }
+                            
+                            connectionList = new ArrayList<Connection>();
+                            
+                            System.out.println("What is the name of the chatroom you wish to join?");
+                            currentChatroom = scan.nextLine();
+                            
+                            byte[] chatroomBytes = currentChatroom.getBytes();
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            
+                            if (chatroomBytes.length <= (MAX_PACKET_SIZE - HEADER_DATA_SIZE)) {
+                                i = 0;
+                                
+                                sendBuf[0] = 0;
+                                sendBuf[1] = (byte)i;
+                                sendBuf[2] = 3;
+                                System.arraycopy(chatroomBytes, 0, sendBuf, 3, chatroomBytes.length);
+                                sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            } else {
+                                i = 0;
+                                
+                                while (i + 1 <= chatroomBytes.length / (MAX_PACKET_SIZE - HEADER_DATA_SIZE)) {                          
+                                    sendBuf = new byte[MAX_PACKET_SIZE];
+                                    sendBuf[0] = 1;
+                                    sendBuf[1] = (byte)i;
+                                    sendBuf[2] = 3;
+                                    System.arraycopy(chatroomBytes, i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE), sendBuf, HEADER_DATA_SIZE, MAX_PACKET_SIZE - HEADER_DATA_SIZE);
+                                    sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                                    UDPSocket.send(sendPacket);
+                                    
+	                                while (!success) {
+	                                    try {
+	                                        success = false;
+	                                        
+	                                        while (!success) {                          
+	                                            recvBuf = new byte[MAX_PACKET_SIZE];
+	                                            receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+	                                            UDPSocket.receive(receivePacket);
+	                                            response = new String(recvBuf, 0, recvBuf.length);
+	                                            response = response.substring(0, response.indexOf(0));
+	                                            success = true;
+	                                        }
+	                                    } catch (SocketTimeoutException e) {
+	                                        UDPSocket.send(sendPacket);
+	                                    }
+	                                }
+                                    
+                                    i++;
+                                }
+                                
+                                sendBuf = new byte[MAX_PACKET_SIZE];
+                                sendBuf[0] = 0;
+                                sendBuf[1] = (byte)i;
+                                sendBuf[2] = 3;
+                                System.arraycopy(chatroomBytes, i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE), sendBuf, HEADER_DATA_SIZE, chatroomBytes.length - (i * (MAX_PACKET_SIZE - HEADER_DATA_SIZE)));
+                                sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            }
+    
+                            UDPSocket.send(sendPacket);
+                            success = false;
+                            
+                            while (!success)
+                            {
+                                try {                                    
+                                    while (!success) {                          
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        
+                                        if (recvBuf[0] == 0 && recvBuf[1] == i + 1 && recvBuf[2] == JOIN) {
+                                            success = true;
+                                        } else{
+                                            UDPSocket.send(sendPacket);
+                                        }   
+                                    }
+                                } catch (SocketTimeoutException e) {
+                                    UDPSocket.send(sendPacket);
+                                }
+                            }
+                            
+                            String address = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                            address = address.substring(0, address.indexOf(0));
+                            connection = new Connection(new Socket(InetAddress.getByName(address), SERVER_SOCKET_NUM));
+                            connectionList.add(connection);
+                            joinThread = new Thread(new HostConnectionHandler(connection, connectionList));
+                            joinThread.start();
+                            
+                            sendMessage(nickname + " has joined the chatroom", connectionList);
+                            
+                            System.out.println("You are now in " + currentChatroom + "'s chatroom. At any time, enter:\n"
+                                    + "QUERY to display a list of peers,\n"
+                                    + "LEAVE to leave "  + currentChatroom + "'s chatroom,\n"
+                                    + "OFFLINE to go offline.");
+                            
+                            break;
+                        case OFFLINE:
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 2;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            
+                            success = false;
+                            UDPSocket.send(sendPacket);
+                            
+                            while (!success) {
+                                try {
+                                    while (!success) {                                        
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        response = new String(recvBuf, 0, recvBuf.length);
+                                        response = response.substring(0, response.indexOf(0));
+                                        
+                                        if (response.equals("0" + sendBuf[1] + "2 200 OK")) {
+                                            success = true;
+                                        } else {
+                                            UDPSocket.send(sendPacket);
+                                        }
+                                    }
+                                } catch (SocketTimeoutException e) {
+                                }
+                            }
+                            
+                            connectionReceiver.closeSocket();
+                            sendMessage("`", connectionList);
+                            
+                            for (i = 0; i < connectionList.size(); i++) {
+                                connectionList.get(i).close();
+                            }
+                            
+                            connectionList = new ArrayList<Connection>();
+                            
+                            online = false;
+                            System.out.println("You are now offline.");                         
+                            System.out.println("Please enter:\n"
+                                    + "ONLINE to go online\n"
+                                    + "QUERY to query for peers\n"
+                                    + "EXIT to exit");
+                            
+                            break;
+                        default:
+                            sendMessage(nickname + ": " + message, connectionList);
+                    }
+                } else {
+                    switch (cmd) {
+                        case QUERY:
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 5;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            UDPSocket.send(sendPacket);
+                            
+                            i = 0;
+                            message = "";
+                            success = false;
+                            
+                            while (!success) {
+                                try {
+                                    do {
+                                        recvBuf = new byte[MAX_PACKET_SIZE];
+                                        receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                        UDPSocket.receive(receivePacket);
+                                        response = new String(recvBuf, HEADER_DATA_SIZE, recvBuf.length - HEADER_DATA_SIZE);
+                                        
+                                        if (response.indexOf(0) >= 0) {
+                                            response = response.substring(0, response.indexOf(0));
+                                        }
+                                        
+                                        if (recvBuf[1] == i) {
+                                            i++;
+                                            
+                                            message = message.concat(response);
+                                            
+                                            sendBuf[0] = 0;
+                                            sendBuf[1] = (byte)i;
+                                            sendBuf[2] = 5;
+                                            System.arraycopy((" 200 OK").getBytes(), 0, sendBuf, HEADER_DATA_SIZE, ((" 200 OK").getBytes()).length);
+                                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                                            UDPSocket.send(sendPacket);
+                                        }
+                                        
+                                        if (recvBuf[0] == 0) {
+                                            success = true;
+                                        }
+                                    } while (recvBuf[0] != 0);
+                                } catch (SocketTimeoutException e) {
+                                    UDPSocket.send(sendPacket);
+                                }
+                            }
+                            
+                            if (message.length() > 0) {
+                                System.out.println(message.substring(0, message.indexOf('`')));
+                                
+                                while (message.indexOf('`') + 1 < message.length()) {
+                                    message = message.substring(message.indexOf('`') + 1);
+                                    System.out.println(message.substring(0, message.indexOf('`')));
+                                }
+                            } else {
+                                System.out.println("There are no users online");
+                            }
+                            
+                            break;
+                        case LEAVE:
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 4;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            
+                            success = false;
+                            
+                            while (!success) {
+                                UDPSocket.send(sendPacket);
+                                
+                                recvBuf = new byte[MAX_PACKET_SIZE];
+                                receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                UDPSocket.receive(receivePacket);
+                                response = new String(recvBuf, 0, recvBuf.length);
+                                response = response.substring(0, response.indexOf(0));
+                                
+                                if (response.equals("0" + sendBuf[1] + "4 200 OK")) {
+                                    success = true;
+                                }
+                            }
+                            
+                            sendMessage(nickname + " has left the chatroom", connectionList);
+                            sendMessage("`", connectionList);
+                            connection.close();
+                            
+                            for (i = 0; i < connectionList.size(); i++) {
+                                connectionList.get(i).close();
+                            }
+                            
+                            connectionList = new ArrayList<Connection>();
+                            connectionReceiver = new HostConnectionReceiver(connectionList);
+                            connectionReceiverThread = new Thread(connectionReceiver);
+                            connectionReceiverThread.start();
+                            
+                            currentChatroom = nickname;
+                            
+                            System.out.println("You are now in your chatroom. At any time, enter:\n"
+                                    + "QUERY to display a list of peers,\n"
+                                    + "JOIN to join another user�s chatroom,\n"
+                                    + "OFFLINE to go offline.");
+                            
+                            break;
+                        case OFFLINE:
+                            sendBuf = new byte[MAX_PACKET_SIZE];
+                            sendBuf[0] = 0;
+                            sendBuf[1] = 0;
+                            sendBuf[2] = 2;
+                            sendPacket = new DatagramPacket(sendBuf, sendBuf.length, directoryAddress, SERVER_SOCKET_NUM);
+                            
+                            success = false;
+                            
+                            while (!success) {
+                                UDPSocket.send(sendPacket);
+                                
+                                recvBuf = new byte[MAX_PACKET_SIZE];
+                                receivePacket = new DatagramPacket(recvBuf, recvBuf.length);
+                                UDPSocket.receive(receivePacket);
+                                response = new String(recvBuf, 0, recvBuf.length);
+                                response = response.substring(0, response.indexOf(0));
+                                
+                                if (response.equals("0" + sendBuf[1] + "2 200 OK")) {
+                                    success = true;
+                                }
+                            }
+                            
+                            sendMessage("`", connectionList);
+                            connection.close();
+                            
+                            for (i = 0; i < connectionList.size(); i++) {
+                                connectionList.get(i).close();
+                            }
+                            
+                            connectionList = new ArrayList<Connection>();
+                            online = false;
+                            
+                            System.out.println("You are now offline.");                         
+                            System.out.println("Please enter:\n"
+                                    + "ONLINE to go online\n"
+                                    + "QUERY to query for peers\n"
+                                    + "EXIT to exit");
+                            
+                            break;
+                        default:
+                            sendMessage(nickname + ": " + message, connectionList);
+                    }
+                }
+            }
+        }
+        
+        scan.close();
+        UDPSocket.close();
+    }
+    
+    public static int getCmd(String message) {
+        int cmd;
+        
+        if (message.equalsIgnoreCase("ONLINE")) {
+            cmd = 1;
+        } else if (message.equalsIgnoreCase("OFFLINE")) {
+            cmd = 2;
+        } else if (message.equalsIgnoreCase("JOIN")) {
+            cmd = 3;
+        } else if (message.equalsIgnoreCase("LEAVE")) {
+            cmd = 4;
+        } else if (message.equalsIgnoreCase("QUERY")) {
+            cmd = 5;
+        } else if (message.equalsIgnoreCase("EXIT")) {
+            cmd = 6;
+        } else {
+            cmd = 0;
+        }
+        
+        return cmd;
+    }
+    
+    public static void sendMessage(String message, List<Connection> connectionList) {
+        for (int i = 0; i < connectionList.size(); i++) {
+            connectionList.get(i).sendMessage(message);
+        }
+    }
+}

@@ -1,0 +1,27 @@
+public class ExpectedPacket {
+	private int seqNum;
+	private int cmd;
+	private byte[] message;
+	
+	public ExpectedPacket(int seqNum, int cmd) {
+		this.seqNum = seqNum;
+		this.cmd = cmd;
+		message = null;
+	}
+	
+	public int getSeqNum() {
+		return seqNum;
+	}
+	
+	public int getCmd() {
+		return cmd;
+	}
+	
+	public byte[] getMessage() {
+		return message;
+	}
+	
+	public void setMessage(byte[] message) {
+		this.message = message;
+	}
+}

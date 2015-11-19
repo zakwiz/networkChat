@@ -1,0 +1,31 @@
+import java.io.IOException;
+import java.net.DatagramPacket;
+import java.net.DatagramSocket;
+import java.net.SocketException;
+import java.net.SocketTimeoutException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public class Directory {	
+	public static void main(String[] args) throws SocketException, IOException {
+		final int MAX_PACKET_SIZE = 80;
+		final int TIMEOUT_LENGTH = 1000;
+		final int SERVER_SOCKET_NUM = 40186;
+		
+		List<User> userList = Collections.synchronizedList(new ArrayList<User>());
+		List<ExpectedPacket> expectedPacketList = Collections.synchronizedList(new ArrayList<ExpectedPacket>());
+
+		DatagramSocket socket = new DatagramSocket(SERVER_SOCKET_NUM);
+		socket.setSoTimeout(TIMEOUT_LENGTH);
+		byte[] receiveData = new byte[MAX_PACKET_SIZE];
+			
+		while (true) {			
+			try {
+			    DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
+			    socket.receive(receivePacket);
+			    new Thread(new DirectoryThread(userList, expectedPacketList, receivePacket, socket)).start();
+			} catch (SocketTimeoutException e) {}
+		}	
+	}
+}

@@ -1,0 +1,38 @@
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.util.List;
+
+public class HostConnectionHandler implements Runnable {
+	private final Connection connection;
+	private List<Connection> connectionList;
+	
+	public HostConnectionHandler(Connection connection, List<Connection> connectionList) {
+		this.connection = connection;
+		this.connectionList = connectionList;
+	}
+	
+	@Override
+	public void run() {
+		BufferedReader in;
+		try {
+			in = new BufferedReader(new InputStreamReader(connection.getSocket().getInputStream()));
+			String nextLine;
+			Connection c;
+			
+			while ((nextLine = in.readLine()) != null && !nextLine.equals("`")) {
+				    System.out.println(nextLine);
+				    
+				    for (int i = 0; i < connectionList.size(); i++) {
+				    	c = connectionList.get(i);
+				    	if (!c.equals(connection)) {
+				    		c.sendMessage(nextLine);
+				    	}
+				    }
+			}
+			
+			connectionList.remove(connectionList.indexOf(connection));
+			connection.close();
+		} catch (IOException e) {}
+	}
+}
